@@ -2,45 +2,51 @@ pipeline {
     agent any
 
     environment {
-        REMOTE_HOST = "192.168.1.100"      // IP або хост віддаленої машини
-        REMOTE_USER = "ubuntu"             // користувач на ВМ
-        SSH_KEY_PATH = "/var/jenkins_home/.ssh/id_ed25519"  // шлях до приватного ключа у контейнері
+        REMOTE_HOST = "172.18.234.92"        // IP твоєї WSL VM
+        REMOTE_USER = "nhoichuk"            // твій користувач WSL
+        SSH_KEY_ID   = "jenkins-ssh-key-id" // ID ключа в Jenkins
+        LOG_FILE     = "/var/log/apache2/access.log"
     }
 
     stages {
-
-        stage('Install Apache') {
+        stage('Start Apache in WSL') {
             steps {
-                script {
+                sshagent([env.SSH_KEY_ID]) {
                     sh """
-                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ${REMOTE_USER}@${REMOTE_HOST} '
-                        sudo apt update &&
-                        sudo apt install -y apache2 &&
-                        sudo systemctl enable apache2 &&
-                        sudo systemctl start apache2
+                    ssh ${REMOTE_USER}@${REMOTE_HOST} '
+                        # Створюємо директорії та змінні для Apache
+                        sudo mkdir -p /var/run/apache2
+                        sudo mkdir -p /var/log/apache2
+                        sudo chown -R www-data:www-data /var/run/apache2
+                        sudo chown -R www-data:www-data /var/log/apache2
+                        export APACHE_RUN_DIR=/var/run/apache2
+                        export APACHE_LOG_DIR=/var/log/apache2
+                        export APACHE_PID_FILE=/var/run/apache2/apache2.pid
+
+                        # Встановлюємо Apache, якщо його нема
+                        if ! command -v apache2 >/dev/null 2>&1; then
+                            sudo apt update -y
+                            sudo apt install apache2 -y
+                        fi
+
+                        # Запускаємо Apache
+                        sudo /usr/sbin/apache2 -k start
                     '
                     """
                 }
             }
         }
 
-        stage('Check Apache Status') {
+        stage('Check Apache Logs') {
             steps {
-                script {
+                sshagent([env.SSH_KEY_ID]) {
                     sh """
-                    ssh -i ${SSH_KEY_PATH} ${REMOTE_USER}@${REMOTE_HOST} 'sudo systemctl status apache2 | head -n 20'
-                    """
-                }
-            }
-        }
-
-        stage('Check Logs for Errors') {
-            steps {
-                script {
-                    sh """
-                    ssh -i ${SSH_KEY_PATH} ${REMOTE_USER}@${REMOTE_HOST} '
-                        echo "----Checking for 4xx and 5xx errors in Apache logs----" &&
-                        grep " 4[0-9][0-9]\\| 5[0-9][0-9]" /var/log/apache2/access.log || echo "No errors found"
+                    ssh ${REMOTE_USER}@${REMOTE_HOST} '
+                        echo "4xx errors:"
+                        sudo grep "HTTP/1.[01]\" [4][0-9][0-9]" ${LOG_FILE} || echo "No 4xx errors found"
+                        
+                        echo "5xx errors:"
+                        sudo grep "HTTP/1.[01]\" [5][0-9][0-9]" ${LOG_FILE} || echo "No 5xx errors found"
                     '
                     """
                 }
@@ -50,10 +56,11 @@ pipeline {
 
     post {
         always {
-            echo 'Pipeline finished!'
+            echo 'Pipeline finished.'
         }
     }
 }
+
 
 
 
